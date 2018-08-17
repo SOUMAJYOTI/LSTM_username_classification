@@ -8,9 +8,30 @@ from keras.preprocessing import sequence
 import pandas as pd
 import pickle
 from sklearn.model_selection import train_test_split
-
+from sklearn.model_selection import KFold
+from sklearn.model_selection import ShuffleSplit
 # fix random seed for reproducibility
+from sklearn.metrics import precision_recall_fscore_support
+
 np.random.seed(7)
+
+
+def getFolds(Y, numFolds):
+    # X = np.zeros(Y.shape[0])
+
+    train_folds = []
+    test_folds = []
+    kf = KFold(n_splits=numFolds)
+    cnt_folds = 0
+    for train_index, test_index in kf.split(Y):
+        train_folds.append(train_index)
+        test_folds.append(test_index)
+
+        cnt_folds += 1
+        if cnt_folds >= numFolds:
+            break
+
+    return train_folds, test_folds
 
 
 def convertWordToNumericList(word, vocab_map):
@@ -51,19 +72,14 @@ def prepareTrainTest(pos_data, neg_data, vocab_map):
         X.append(nameNumList)
         y.append(0.)
 
-    print(X[:10])
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.33, random_state=42)
-
-    print(X_train[:10])
-    return X_train, X_test, y_train, y_test
+    return X, np.asarray(y)
 
 
-def learnAndPredict(X_train, X_test, y_train, y_test, vocab_length):
+def learnAndPredict(X, y, vocab_length):
     # truncate and pad input sequences
-    max_uname_length = 10
+    max_uname_length = 15
 
-    X_train = sequence.pad_sequences(X_train, maxlen=max_uname_length)
-    X_test = sequence.pad_sequences(X_test, maxlen=max_uname_length)
+    X = sequence.pad_sequences(X, maxlen=max_uname_length)
 
     # create the model
     embedding_vecor_length = 8
@@ -72,12 +88,44 @@ def learnAndPredict(X_train, X_test, y_train, y_test, vocab_length):
     model.add(LSTM(100))
     model.add(Dense(1, activation='sigmoid'))
     model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
-    print(model.summary())
-    model.fit(X_train, y_train, validation_data=(X_test, y_test), epochs=20, batch_size=32)
+    # print(model.summary())
 
-    # Final evaluation of the model
-    scores = model.evaluate(X_test, y_test, verbose=0)
-    print("Accuracy: %.2f%%" % (scores[1]*100))
+    kf = ShuffleSplit(n_splits=10, test_size=.1, random_state=0)
+    prec_pos = 0.
+    rec_pos = 0.
+    f1_pos = 0.
+    prec_neg = 0.
+    rec_neg=0.
+    f1_neg=0.
+
+    for train_index, test_index in kf.split(X):
+        X_train, X_test = X[train_index], X[test_index]
+        y_train, y_test = y[train_index], y[test_index]
+
+        model.fit(X_train, y_train,  epochs=50, batch_size=32, verbose=False)
+        # Final evaluation of the model
+        y_pred = model.predict_classes(X_test)
+
+        y_pred_new = []
+        for i in range(len(y_pred)):
+            y_pred_new.append(y_pred[i][0])
+
+        precision, recall, f1, support = precision_recall_fscore_support(y_test, y_pred_new)
+
+        prec_pos += precision[1]
+        rec_pos += recall[1]
+        f1_pos += f1[1]
+
+        prec_neg += precision[0]
+        rec_neg += recall[0]
+        f1_neg += f1[0]
+
+        # scores = model.evaluate(X_test, y_test, verbose=0)
+        # print("Accuracy: %.2f%%" % (scores[1]*100))
+
+    print("Positive: ", prec_pos/10, rec_pos/10, f1_pos/10)
+    print("negative:", prec_neg/10, rec_neg/10, f1_neg/10)
+
 
 if __name__ == "__main__":
     pos_file = "../data/pos_labels.txt"
@@ -90,6 +138,6 @@ if __name__ == "__main__":
     data_neg_df.columns = ["username"]
 
     vocab_map = pickle.load(open("../data/vocab_map.pickle", "rb"))
-    X_train, X_test, y_train, y_test = prepareTrainTest(data_pos_df, data_neg_df, vocab_map)
+    X, y = prepareTrainTest(data_pos_df, data_neg_df, vocab_map)
 
-    learnAndPredict(X_train, X_test, y_train, y_test, len(vocab_map))
+    learnAndPredict(X, y, len(vocab_map))
